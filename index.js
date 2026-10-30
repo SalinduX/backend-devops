@@ -1,8 +1,29 @@
-const express = require('express');
-const app= express();
-const PORT =  3000;
+const express =require("express");
+const app=express();
+const PORT =3000;
 
 app.use(express.json());
+
+app.use((req,res,next)=>{
+    const start =Date.now();
+
+    res.on('finish',() =>{
+        console.log(`${req.method} ${req.originalUrl} -> ${res.statusCode} (${Date.now() - start}ms)`);
+
+    });
+    next();
+
+});
+
+function validateTodo(req,res,next){
+    const {title} =req.body;
+    if(!title || typeof title != 'string' || title.trim()=== '' ){
+        const err = new Error('title is required (non-empty string)');
+        err.status = 400;
+        return next(err);
+    }
+    next();
+}
 
 let todos =[
     {id:1, title: 'Learn Node.js', done: false},
@@ -25,11 +46,10 @@ app.get('/todos/:id', (req,res) => {
     res.json(todo);
 });
 
-app.post('/todos',(req,res) =>{
+app.post('/todos',validateTodo,(req,res) =>{
     const {title} = req.body;
-    if(!title || typeof title != 'string') {
-        return res.status(400).json({error: 'Title is required'}); 
-}
+    
+
 const todo = {id:nextId++, title, done: false};
 todos.push(todo);
 res.status(201).json(todo);
@@ -51,7 +71,14 @@ app.delete('/todos/:id',(req,res)=>{
     todos.splice(index,1);
     res.status(204).send();
 });
-
+app.use((err,req,res,next)=>{
+    const status=err.status || 500;
+    res.status(status).json({
+        error:status===500 ? 'Internal Server Error' : err.message,
+    });
+    if(status===500)
+        console.error(err);
+});
 
 
 app.listen(PORT,() =>{
