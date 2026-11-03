@@ -1,4 +1,5 @@
 const express =require("express");
+const pool =require('./db');
 const app=express();
 const PORT =3000;
 
@@ -15,7 +16,10 @@ app.use((req,res,next)=>{
 
 });
 
-function validateTodo(req,res,next){
+const asyncHandler = fn => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
+
+function validateTodo(req, res ,next){
     const {title} =req.body;
     if(!title || typeof title != 'string' || title.trim()=== '' ){
         const err = new Error('title is required (non-empty string)');
@@ -25,52 +29,103 @@ function validateTodo(req,res,next){
     next();
 }
 
-let todos =[
-    {id:1, title: 'Learn Node.js', done: false},
-    {id:2, title: 'Build a REST API', done: false},
-    {id:3, title: 'Test the API', done: false     }
-];
-let nextId = 4;
+function validateId(req,res,next){
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <  1){
+        const err = new Error('id must be a positive integer');
+        err.status=400;
+        return next(err);
+    }
+    req.todoId = id;
+    next();
 
-app.get('/todos',(req,res)=>{
-    const {done} =req.query;
-    if(done !== undefined){
-        return res.json(todos.filter(t=> t.done === (done === 'true')))
 }
-res.json(todos);
-});
 
-app.get('/todos/:id', (req,res) => {
-    const todo = todos.find(t=> t.id === Number(req.params.id));
-    if(!todo) return res.status(404).json({error:'Todo not found'});
-    res.json(todo);
-});
+    app.get('/health',asyncHandler(async(req,res)=>{
+        await pool.query('SELECT 1');
+        res.json({status:'ok',db:'connected',uptime: process.uptime()});
+    }));
 
-app.post('/todos',validateTodo,(req,res) =>{
-    const {title} = req.body;
+
+
+app.get('/todos',asyncHandler(async(req,res)=>{
+    const {done , search} =req.query;
+    const conditions=[];
+    const values=[];
+    if(done !== undefined){
+        values.push(done === 'true');
+        conditions.push(`done = $${values.length}`);
+    }
+    if (search){
+        values.push(`%${search}%`);
+        conditions.push(`title ILIKE $${values.length}`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const {rows }=await pool.query(`SELECT * FROM todos ${where} ORDER BY id`,values); 
+    res.json(rows);
+}));
+
+
+
+app.get('/todos/:id',validateId,asyncHandler(async (req,res) => {
+
+    const {rows} = await pool.query(`SELECT *FROM todos WHERE id = $1`,[req.todoId]); 
+    if(rows.length === 0){
+        const err = new Error('Todo not found');
+        err.status = 404;
+        throw err;
+    }
+    res.json(rows[0]);
+}));
+
+app.post('/todos',validateTodo,asyncHandler(async(req,res) =>{
+
+    const {rows} =await pool.query(
+`INSERT INTO todos (title) VALUES ($1) RETURNING *`,[req.body.title.trim()]
+    );
+    res.status(201).json(rows[0]);
+}));
+
+
+app.put('/todos/:id',validateId,asyncHandler(async(req,res) =>{
     
+    const {title,done} = req.body;
 
-const todo = {id:nextId++, title, done: false};
-todos.push(todo);
-res.status(201).json(todo);
-});
+    const {rows} = await pool.query(
+        `UPDATE todos 
+        SET title = COALESCE($1, title),
+            done = COALESCE($2,done)
+        WHERE id = $3 
+        RETURNING *`,[title ?? null, done ?? null, req.todoId]
+    );
+    
+    
+     if(rows.length === 0){
+        const err = new Error('Todo not found');
+        err.status = 404;
+        throw err;
+    }
+    res.json(rows[0]);
+}));
 
-app.put('/todos/:id',(req,res) =>{
-    const todo = todos.find(t=>  t.id === Number(req.params.id));
-    if(!todo) return res.status(404).json({error: 'Todo not found' });
+app.delete('/todos/:id', validateId, asyncHandler(async(req,res)=>{
 
-        const {title,done}=req.body;
-        if(title !=undefined) todo.title =title;
-        if(done !=undefined) todo.done =done;
-        res.json(todo);
-        });
 
-app.delete('/todos/:id',(req,res)=>{
-    const index = todos.findIndex(t=> t.id=== Number(req.params.id));
-    if(index === -1) return res.status(404).json({error:'Todo not found'});
-    todos.splice(index,1);
+    const {rowCount} = await pool.query(`DELETE FROM todos WHERE id = $1`,[req.todoId]);
+    if(rowCount === 0){
+        const err = new Error('Todo not found');
+        err.status = 404;
+        throw err;
+    } 
     res.status(204).send();
-});
+}));
+
+app.use((req,res,next)=>{
+    const err = new Error(`Route ${req.method} ${req.originalUrl} not found`);
+    err.status =404;
+    next(err);
+})
+
 app.use((err,req,res,next)=>{
     const status=err.status || 500;
     res.status(status).json({
