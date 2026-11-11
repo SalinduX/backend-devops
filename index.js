@@ -2,6 +2,7 @@ const express =require("express");
 const pool =require('./db');
 const app=express();
 const PORT =3000;
+const {validate, createTodoSchema, updateTodoSchema, listQuerySchema} = require('./validate');
 
 app.use(express.json());
 
@@ -19,15 +20,6 @@ app.use((req,res,next)=>{
 const asyncHandler = fn => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
 
-function validateTodo(req, res ,next){
-    const {title} =req.body;
-    if(!title || typeof title != 'string' || title.trim()=== '' ){
-        const err = new Error('title is required (non-empty string)');
-        err.status = 400;
-        return next(err);
-    }
-    next();
-}
 
 function validateId(req,res,next){
     const id = Number(req.params.id);
@@ -48,8 +40,8 @@ function validateId(req,res,next){
 
 
 
-app.get('/todos',asyncHandler(async(req,res)=>{
-    const {done , search} =req.query;
+app.get('/todos', validate(listQuerySchema, 'query'),asyncHandler(async(req,res)=>{
+    const {done , search , page, limit} =req.valid.query;
     const conditions=[];
     const values=[];
     if(done !== undefined){
@@ -61,8 +53,15 @@ app.get('/todos',asyncHandler(async(req,res)=>{
         conditions.push(`title ILIKE $${values.length}`);
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const {rows }=await pool.query(`SELECT * FROM todos ${where} ORDER BY id`,values); 
-    res.json(rows);
+    const countResult = await pool.query(`SELECT COUNT(*) FROM todos ${where}`,values);
+    const total = Number(countResult.rows[0].count);
+
+
+    values.push(limit,(page -1)* limit);
+
+
+    const {rows }=await pool.query(`SELECT * FROM todos ${where} ORDER BY id LIMIT $${values.length - 1} OFFSET $${values.length}`, values); 
+    res.json({page, limit,total,totalPages: Math.ceil(total/limit),data:rows});
 }));
 
 
@@ -78,18 +77,18 @@ app.get('/todos/:id',validateId,asyncHandler(async (req,res) => {
     res.json(rows[0]);
 }));
 
-app.post('/todos',validateTodo,asyncHandler(async(req,res) =>{
+app.post('/todos',validate(createTodoSchema),asyncHandler(async(req,res) =>{
 
     const {rows} =await pool.query(
-`INSERT INTO todos (title) VALUES ($1) RETURNING *`,[req.body.title.trim()]
+`INSERT INTO todos (title) VALUES ($1) RETURNING *`,[req.valid.body.title]
     );
     res.status(201).json(rows[0]);
 }));
 
 
-app.put('/todos/:id',validateId,asyncHandler(async(req,res) =>{
+app.put('/todos/:id',validateId,validate(updateTodoSchema),asyncHandler(async(req,res) =>{
     
-    const {title,done} = req.body;
+    const {title,done} = req.valid.body;
 
     const {rows} = await pool.query(
         `UPDATE todos 
