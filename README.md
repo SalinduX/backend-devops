@@ -47,6 +47,7 @@ cd backend-devops
 
 npm install
 npm zod
+npm install bcryptjs jsonwebtoken
 
 3.Configure environment variables:
 

@@ -1,10 +1,18 @@
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const {requireAuth} = require('./auth');
 const express =require("express");
 const pool =require('./db');
 const app=express();
 const PORT =3000;
-const {validate, createTodoSchema, updateTodoSchema, listQuerySchema} = require('./validate');
+const {validate, createTodoSchema, updateTodoSchema, listQuerySchema, registerScheama, loginSchema} = require('./validate');
 
 app.use(express.json());
+
+if(!process.env.JWT_SECRET){
+    console.error('JWT_SECRET is not set in environment variables');
+    process.exit(1);
+}
 
 app.use((req,res,next)=>{
     const start =Date.now();
@@ -38,12 +46,53 @@ function validateId(req,res,next){
         res.json({status:'ok',db:'connected',uptime: process.uptime()});
     }));
 
+    app.post('/auth/register',validate(registerScheama),asyncHandler(async(req,res) =>{
+        const {email,password} = req.valid.body;
+        const passwordHash = await bcrypt.hash(password,10);
 
+        try{
+            const {rows} = await pool.query(
+                'INSERT INTO users (email,password_hash) VALUES ($1,$2) RETURNING id,email,created_at',
+                [email, passwordHash]
+            );
+            res.status(201).json(rows[0]);
+        }catch(e){
+            if(e.code === '23505'){
+                const err = new Error('Email already exists');
+                err.status = 409;
+                throw err;
+            }
+            throw err;
+        }
+    }));
 
-app.get('/todos', validate(listQuerySchema, 'query'),asyncHandler(async(req,res)=>{
+    app.post('/auth/login',validate(loginSchema),asyncHandler(async (req,res)=>{
+        const {email,password} = req.valid.body;
+        const {rows} = await pool.query('SELECT * FROM users WHERE email = $1',[email]);
+        const user =rows[0];
+
+        const ok = user && (await bcrypt.compare(password,user.password_hash));
+        if(!ok){
+            const err = new Error('Invalid email or password');
+            err.status = 401;
+            throw err;
+        }
+
+        const token = jwt.sign({id:user.id},process.env.JWT_SECRET,{expiresIn:'1h'});
+        res.json({token});
+    }));
+
+    app.get('/auth/me',requireAuth,asyncHandler(async (req,res)=>{
+        const {rows} = await pool.query(
+            'SELECT id,email, created_at FROM users WHERE id =$1',[req.user.id]);
+        res.json(rows[0]);
+    }));
+
+app.get('/todos', requireAuth,validate(listQuerySchema, 'query'),asyncHandler(async(req,res)=>{
     const {done , search , page, limit} =req.valid.query;
-    const conditions=[];
-    const values=[];
+    const conditions=['user_id = $1'];
+    const values=[req.user.id];
+
     if(done !== undefined){
         values.push(done === 'true');
         conditions.push(`done = $${values.length}`);
@@ -52,7 +101,7 @@ app.get('/todos', validate(listQuerySchema, 'query'),asyncHandler(async(req,res)
         values.push(`%${search}%`);
         conditions.push(`title ILIKE $${values.length}`);
     }
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const where =  `WHERE ${conditions.join(' AND ')}`;
     const countResult = await pool.query(`SELECT COUNT(*) FROM todos ${where}`,values);
     const total = Number(countResult.rows[0].count);
 
@@ -66,9 +115,10 @@ app.get('/todos', validate(listQuerySchema, 'query'),asyncHandler(async(req,res)
 
 
 
-app.get('/todos/:id',validateId,asyncHandler(async (req,res) => {
+app.get('/todos/:id',requireAuth,validateId,asyncHandler(async (req,res) => {
 
-    const {rows} = await pool.query(`SELECT *FROM todos WHERE id = $1`,[req.todoId]); 
+    const {rows} = await pool.query(`SELECT *FROM todos WHERE id = $1 AND user_id =$2`,[req.todoId, req.user.id]);
+
     if(rows.length === 0){
         const err = new Error('Todo not found');
         err.status = 404;
@@ -77,16 +127,16 @@ app.get('/todos/:id',validateId,asyncHandler(async (req,res) => {
     res.json(rows[0]);
 }));
 
-app.post('/todos',validate(createTodoSchema),asyncHandler(async(req,res) =>{
+app.post('/todos',requireAuth,validate(createTodoSchema),asyncHandler(async(req,res) =>{
 
     const {rows} =await pool.query(
-`INSERT INTO todos (title) VALUES ($1) RETURNING *`,[req.valid.body.title]
+`INSERT INTO todos (title, user_id) VALUES ($1, $2) RETURNING *`,[req.valid.body.title, req.user.id]
     );
     res.status(201).json(rows[0]);
 }));
 
 
-app.put('/todos/:id',validateId,validate(updateTodoSchema),asyncHandler(async(req,res) =>{
+app.put('/todos/:id',requireAuth,validateId,validate(updateTodoSchema),asyncHandler(async(req,res) =>{
     
     const {title,done} = req.valid.body;
 
@@ -94,8 +144,8 @@ app.put('/todos/:id',validateId,validate(updateTodoSchema),asyncHandler(async(re
         `UPDATE todos 
         SET title = COALESCE($1, title),
             done = COALESCE($2,done)
-        WHERE id = $3 
-        RETURNING *`,[title ?? null, done ?? null, req.todoId]
+        WHERE id = $3 AND user_id =$4
+        RETURNING *`,[title ?? null, done ?? null, req.todoId, req.user.id]
     );
     
     
@@ -107,10 +157,10 @@ app.put('/todos/:id',validateId,validate(updateTodoSchema),asyncHandler(async(re
     res.json(rows[0]);
 }));
 
-app.delete('/todos/:id', validateId, asyncHandler(async(req,res)=>{
+app.delete('/todos/:id',requireAuth, validateId, asyncHandler(async(req,res)=>{
 
 
-    const {rowCount} = await pool.query(`DELETE FROM todos WHERE id = $1`,[req.todoId]);
+    const {rowCount} = await pool.query(`DELETE FROM todos WHERE id = $1 AND user_id = $2`,[req.todoId, req.user.id]);
     if(rowCount === 0){
         const err = new Error('Todo not found');
         err.status = 404;

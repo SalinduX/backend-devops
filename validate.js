@@ -20,6 +20,18 @@ const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(10),
 });
 
+
+const registerScheama = z.object({
+  email: z.string().trim().toLowerCase().email('invalid email').max(255),
+  password: z.string().min(8, 'password must be at least 8 characters').max(72),
+});
+
+const loginSchema = z.object({
+  email: z.string().trim().toLowerCase().email('invalid email').max(255),
+  password: z.string().min(1, 'password cannot be empty'),
+
+});
+
 function formatIssues(error) {
   return error.issues
     .map(i => `${i.path.join('.') || 'body'}: ${i.message}`)
@@ -39,4 +51,4 @@ const validate = (schema, source = 'body') => (req, res, next) => {
   next();
 };
 
-module.exports = { validate, createTodoSchema, updateTodoSchema, listQuerySchema };
+module.exports = { validate, createTodoSchema, updateTodoSchema, listQuerySchema ,registerScheama,loginSchema};
