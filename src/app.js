@@ -1,0 +1,31 @@
+const express = require('express');
+const pool = require('./db/pool');
+const logger = require('./middleware/logger');
+const asyncHandler = require('./middleware/asyncHandler');
+const { notFound, errorHandler } = require('./middleware/errorHandler');
+const authRoutes = require('./routes/auth.routes');
+const todoRoutes = require('./routes/todos.routes');
+
+const app = express();
+
+app.use(express.json());
+app.use(logger);
+
+// Liveness: process එක ජීවතුන් අතරද? (DB අවශ්‍ය නැහැ)
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime() });
+});
+
+// Readiness: DB එකට connect වෙන්න පුළුවන්ද?
+app.get('/health/db', asyncHandler(async (req, res) => {
+  await pool.query('SELECT 1');
+  res.json({ status: 'ok', db: 'connected' });
+}));
+
+app.use('/auth', authRoutes);
+app.use('/todos', todoRoutes);
+
+app.use(notFound);
+app.use(errorHandler);
+
+module.exports = app;
