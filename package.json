@@ -10,7 +10,7 @@
   },
   "jest":{
     "testEnvironment": "node",
-    "setupFiles": ["<rooDir>/tests/setupEnv.js"]
+    "setupFiles": ["<rootDir>/tests/setupEnv.js"]
   },
   "repository": {
     "type": "git",
