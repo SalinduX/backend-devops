@@ -7,6 +7,8 @@ const authRoutes = require('./routes/auth.routes');
 const todoRoutes = require('./routes/todos.routes');
 
 const app = express();
+const swaggerUi = require('swagger-ui-express');
+const openapi = require('./docs/openapi');
 
 app.use(express.json());
 if (process.env.NODE_ENV !== 'test') app.use(logger); // Jest NODE_ENV=test auto set කරනවා
@@ -16,6 +18,9 @@ if (process.env.NODE_ENV !== 'test') app.use(logger); // Jest NODE_ENV=test auto
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
+
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(openapi));
+app.get('/openapi.json', (req, res) => res.json(openapi));
 
 // Readiness: DB එකට connect වෙන්න පුළුවන්ද?
 app.get('/health/db', asyncHandler(async (req, res) => {
